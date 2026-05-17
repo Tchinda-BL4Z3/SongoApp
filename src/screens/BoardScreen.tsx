@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -13,37 +13,41 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, typography, spacing, borderRadius } from '../theme';
 import BottomNav from '../components/BottomNav';
+import { playTurn } from '../game/engine';
+import { saveGameRecord } from '../game/history';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { startBgm, stopBgm } from '../game/sound';
+
+const SOUND_KEY = 'songo_sound';
 
 const WOOD_TEXTURE =
   'https://lh3.googleusercontent.com/aida-public/AB6AXuCpFEfZBmR8yqY-_6gXTdO5L1TmhH4u7MM5Hi2I7EWCGgS7HA7Bdz9HWNDpJ8aP-HWbzXTzoCvHoDjwQ2-s_z90JeUVj7GYwxYF5_d6_EVnxblRFIrLJkTY8b7-ImKIFIK7t7pgMnpXuDJjK7rn9QmX-JT4SyeGRbSz-CbqYi_gMC4FRYGNJiQcbOqRq214E3Iuc9vWlquhfp3Ip62_LhwKsaxZGafecVMH7S0mkEDkAjgYwK0_1d8uyKF0MQF1N8EjWcgzN67OaLT2';
+
 const BOARD_BG =
   'https://lh3.googleusercontent.com/aida-public/AB6AXuCp0X0t79mmXPes4x27y7B3_qSMtKP6AStD30FK5mNpgoEh5Z8RRWWgei7XnMMWoZ4ZZi7UlFeEww4qrC4wBotHRrLiXY8116WDIHDn4WZxNMzX0s5lrZ13c59fSM-j7N4xeozf_Npk0adEKlsSnpuEMURGj2ru_i13PwO5QPt2iARWe_h_KKcM0jGqX8K2g_tVJrqRL08FbrhNVVqWcmCgCnUjGyVRSXjdNoYtifxg0852pBseS1FQaAe8gX6cqp-Reyk7o0proz2b';
 
 const screenWidth = Dimensions.get('window').width;
-const pitSize = Math.min((screenWidth - 80) / 6, 80);
+
+/* ✅ MODIF : adaptation 7 cases */
+const pitSize = Math.min((screenWidth - 40) / 7, 70);
 
 interface SeedConfig {
   light: number;
   dark: number;
 }
 
-const opponentPits: SeedConfig[] = [
-  { light: 2, dark: 1 },
-  { light: 1, dark: 3 },
-  { light: 2, dark: 0 },
-  { light: 2, dark: 3 },
-  { light: 1, dark: 0 },
-  { light: 1, dark: 3 },
-];
+const initialBoard = [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5];
 
-const userPits: SeedConfig[] = [
-  { light: 2, dark: 2 },
-  { light: 1, dark: 2 },
-  { light: 2, dark: 2 },
-  { light: 2, dark: 0 },
-  { light: 1, dark: 2 },
-  { light: 3, dark: 2 },
-];
+const seedPatterns: Record<number, SeedConfig> = {
+  0: { light: 0, dark: 0 },
+  1: { light: 1, dark: 0 },
+  2: { light: 1, dark: 1 },
+  3: { light: 2, dark: 1 },
+  4: { light: 2, dark: 2 },
+  5: { light: 3, dark: 2 },
+  6: { light: 3, dark: 3 },
+  7: { light: 4, dark: 3 },
+};
 
 function Seed({ isLight, size }: { isLight: boolean; size: number }) {
   return (
@@ -91,15 +95,17 @@ const seedStyles = StyleSheet.create({
   },
 });
 
-function Pit({
+ function Pit({
   seeds,
-  isActive,
+  onPress,
   isSuggested,
+  activeOwner,
 }: {
   seeds: SeedConfig;
-  isActive?: boolean;
+  onPress?: () => void;
   isSuggested?: boolean;
-}) {
+  activeOwner?: 'player' | 'opponent';
+}){
   const seedSize = pitSize * 0.22;
   const seedElements: React.ReactNode[] = [];
 
@@ -110,12 +116,20 @@ function Pit({
     seedElements.push(<Seed key={`d-${i}`} isLight={false} size={seedSize} />);
   }
 
+  const activeStyle =
+    activeOwner === 'player'
+      ? pitStyles.activePlayer
+      : activeOwner === 'opponent'
+      ? pitStyles.activeOpponent
+      : null;
+
   return (
     <Pressable
+      onPress={onPress}
       style={[
         pitStyles.base,
         { width: pitSize, height: pitSize, borderRadius: pitSize / 2 },
-        isActive && pitStyles.active,
+        activeStyle,
         isSuggested && pitStyles.suggested,
       ]}
     >
@@ -125,6 +139,8 @@ function Pit({
     </Pressable>
   );
 }
+
+
 
 const pitStyles = StyleSheet.create({
   base: {
@@ -168,22 +184,256 @@ const pitStyles = StyleSheet.create({
     width: '80%',
     zIndex: 10,
   },
+  activePlayer: {
+    borderColor: colors.primary,
+    borderWidth: 3,
+    shadowColor: colors.primary,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  activeOpponent: {
+    borderColor: colors.secondaryContainer,
+    borderWidth: 3,
+    shadowColor: colors.secondaryContainer,
+    shadowRadius: 8,
+    elevation: 6,
+  },
 });
 
-export default function BoardScreen() {
+const playerIndexes = [0, 1, 2, 3, 4, 5, 6];
+const opponentIndexes = [7, 8, 9, 10, 11, 12, 13];
+
+export default function BoardScreen({
+  mode,
+  player1Name,
+  player2Name,
+  onBack,
+}: {
+  mode: 'ai' | 'local';
+  player1Name: string;
+  player2Name: string;
+  onBack: () => void;
+}) {
+  const [board, setBoard] = useState<number[]>(initialBoard);
+  const [score, setScore] = useState({
+    player: 0,
+    opponent: 0,
+  });
+  const [currentPlayer, setCurrentPlayer] =
+    useState<'player' | 'opponent'>('player');
+  const [statusMessage, setStatusMessage] = useState(`${player1Name}'s Turn`);
+  const [lastMoveText, setLastMoveText] = useState('Ready to play');
+  const [gameOver, setGameOver] = useState(false);
+
+  const getSeedConfig = (count: number) => {
+    return seedPatterns[count] || {
+      light: Math.ceil(count / 2),
+      dark: count - Math.ceil(count / 2),
+    };
+  };
+
+  const finishGame = useCallback((nextBoard: number[]) => {
+    const playerEmpty = playerIndexes.every(i => nextBoard[i] === 0);
+    const opponentEmpty = opponentIndexes.every(i => nextBoard[i] === 0);
+
+    if (!playerEmpty && !opponentEmpty) {
+      return false;
+    }
+
+    const playerRemaining = playerIndexes.reduce(
+      (total, index) => total + nextBoard[index],
+      0
+    );
+    const opponentRemaining = opponentIndexes.reduce(
+      (total, index) => total + nextBoard[index],
+      0
+    );
+
+    const finalPlayer1Score = score.player + playerRemaining;
+    const finalPlayer2Score = score.opponent + opponentRemaining;
+    let winner: 'player1' | 'player2' | 'draw';
+
+    if (finalPlayer1Score > finalPlayer2Score) {
+      winner = 'player1';
+    } else if (finalPlayer2Score > finalPlayer1Score) {
+      winner = 'player2';
+    } else {
+      winner = 'draw';
+    }
+
+    setScore(prev => ({
+      player: prev.player + playerRemaining,
+      opponent: prev.opponent + opponentRemaining,
+    }));
+    const winnerMessage =
+      finalPlayer1Score > finalPlayer2Score
+        ? `${player1Name} gagne !`
+        : finalPlayer2Score > finalPlayer1Score
+        ? `${player2Name} gagne !`
+        : `Égalité`;
+    setStatusMessage('Game over');
+    setLastMoveText(winnerMessage);
+    setGameOver(true);
+    setBoard(nextBoard.map(() => 0));
+
+    // Save game record
+    saveGameRecord({
+      player1Name,
+      player2Name,
+      player1Score: finalPlayer1Score,
+      player2Score: finalPlayer2Score,
+      mode,
+      timestamp: Date.now(),
+      winner,
+    });
+
+    // Stop background music when the game ends
+    try {
+      stopBgm();
+    } catch {}
+
+    return true;
+  }, [player1Name, player2Name, mode, score]);
+
+  const resetGame = () => {
+    setBoard(initialBoard.slice());
+    setScore({ player: 0, opponent: 0 });
+    setCurrentPlayer('player');
+    setStatusMessage(`${player1Name}'s Turn`);
+    setLastMoveText('Ready to play');
+    setGameOver(false);
+  };
+
+  const handlePitPress = (index: number) => {
+    if (gameOver || board[index] === 0) {
+      return;
+    }
+
+    const isPlayerSide = index < 7;
+    if (mode === 'ai') {
+      if (currentPlayer !== 'player' || !isPlayerSide) {
+        return;
+      }
+    } else {
+      if (currentPlayer === 'player' && !isPlayerSide) {
+        return;
+      }
+      if (currentPlayer === 'opponent' && isPlayerSide) {
+        return;
+      }
+    }
+
+    const { board: nextBoard, captured } = playTurn(board, index, currentPlayer);
+
+    setBoard(nextBoard);
+    setScore(prev => ({
+      ...prev,
+      [currentPlayer]: prev[currentPlayer] + captured,
+    }));
+    setLastMoveText(
+      captured > 0
+        ? `${currentPlayer === 'player' ? player1Name : player2Name} captured ${captured} seeds`
+        : `${currentPlayer === 'player' ? player1Name : player2Name} moved`
+    );
+
+    if (!finishGame(nextBoard)) {
+      const nextPlayer =
+        mode === 'local'
+          ? currentPlayer === 'player'
+            ? 'opponent'
+            : 'player'
+          : 'opponent';
+
+      setCurrentPlayer(nextPlayer);
+      setStatusMessage(
+        mode === 'local'
+          ? nextPlayer === 'player'
+            ? `${player1Name}'s Turn`
+            : `${player2Name}'s Turn`
+          : `${player2Name}'s Turn`
+      );
+    }
+  };
+
+  useEffect(() => {
+    if (mode !== 'ai' || currentPlayer !== 'opponent' || gameOver) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      const playable = opponentIndexes.filter(i => board[i] > 0);
+
+      if (playable.length === 0) {
+        finishGame(board);
+        return;
+      }
+
+      const choice = playable[Math.floor(Math.random() * playable.length)];
+      const { board: nextBoard, captured } = playTurn(board, choice, currentPlayer);
+
+      setBoard(nextBoard);
+      setScore(prev => ({
+        ...prev,
+        opponent: prev.opponent + captured,
+      }));
+      setLastMoveText(
+        captured > 0
+          ? `${player2Name} captured ${captured} seeds`
+          : `${player2Name} moved`
+      );
+
+      if (!finishGame(nextBoard)) {
+        setCurrentPlayer('player');
+        setStatusMessage(`${player1Name}'s Turn`);
+      }
+    }, 900);
+
+    return () => clearTimeout(timeout);
+  }, [currentPlayer, board, gameOver, mode, player1Name, player2Name, finishGame]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(SOUND_KEY)
+      .then(v => {
+        if (v === null || v === '1') {
+          startBgm();
+        } else {
+          stopBgm();
+        }
+      })
+      .catch(() => {
+        // ignore
+      });
+
+    return () => {
+      stopBgm();
+    };
+  }, []);
+
+  const playerBoard = board.slice(0, 7);
+  const opponentBoard = board.slice(7, 14);
+  const suggestedPit =
+    currentPlayer === 'player'
+      ? playerBoard.findIndex((count, index) => count > 0 && index >= 0)
+      : -1;
+
   return (
     <ImageBackground source={{ uri: WOOD_TEXTURE }} style={styles.bg}>
       <SafeAreaView style={styles.safe}>
         <StatusBar barStyle="light-content" backgroundColor={colors.background} />
 
         <View style={styles.header}>
-          <Pressable style={styles.headerBtn}>
-            <Text style={styles.headerBtnText}>☰</Text>
+          <Pressable style={styles.headerBtn} onPress={onBack}>
+            <Text style={styles.headerBtnText}>←</Text>
           </Pressable>
           <Text style={styles.headerTitle}>Songo</Text>
-          <Pressable style={styles.headerBtn}>
-            <Text style={styles.headerBtnText}>⚙️</Text>
-          </Pressable>
+          <View style={styles.headerRightButtons}>
+            <Pressable style={styles.headerBtn} onPress={resetGame}>
+              <Text style={styles.headerBtnText}>New</Text>
+            </Pressable>
+            <Pressable style={styles.headerBtn}>
+              <Text style={styles.headerBtnText}>⚙️</Text>
+            </Pressable>
+          </View>
         </View>
 
         <ScrollView
@@ -193,56 +443,70 @@ export default function BoardScreen() {
         >
           <View style={styles.scoreboard}>
             <View style={styles.scoreCard}>
-              <Text style={styles.scoreLabel}>PLAYER 1</Text>
-              <Text style={styles.scoreValue}>12</Text>
+              <Text style={styles.scoreLabel}>{player1Name}</Text>
+              <Text style={styles.scoreValue}>{score.player}</Text>
             </View>
             <View style={[styles.scoreCard, styles.scoreCardActive]}>
               <View style={styles.activeDotRow}>
-                <Text style={styles.scoreLabel}>PLAYER 2</Text>
+                <Text style={styles.scoreLabel}>{player2Name}</Text>
                 <View style={styles.activeDot} />
               </View>
               <Text style={[styles.scoreValue, styles.scoreValueActive]}>
-                08
+                {score.opponent}
               </Text>
             </View>
           </View>
 
           <View style={styles.turnBanner}>
             <Text style={styles.turnIcon}>⚡</Text>
-            <Text style={styles.turnText}>Your Turn</Text>
+            <Text style={styles.turnText}>{statusMessage}</Text>
           </View>
 
           <View style={styles.boardOuter}>
             <View style={styles.boardInner} />
             <View style={styles.board}>
               <View style={styles.boardRow}>
-                {opponentPits.map((pit, i) => (
-                  <Pit
-                    key={`opp-${i}`}
-                    seeds={pit}
-                  />
-                ))}
+                {opponentBoard.map((count, i) => {
+                  const actualIndex = i + 7;
+                  const selectable = mode === 'local' && currentPlayer === 'opponent' && count > 0;
+                  return (
+                    <Pit
+                      key={`opp-${i}`}
+                      seeds={getSeedConfig(count)}
+                      activeOwner={selectable ? 'opponent' : undefined}
+                      onPress={selectable ? () => handlePitPress(actualIndex) : undefined}
+                    />
+                  );
+                })}
               </View>
               <View style={styles.boardDivider} />
               <View style={styles.boardRow}>
-                {userPits.map((pit, i) => (
-                  <Pit
-                    key={`usr-${i}`}
-                    seeds={pit}
-                    isActive
-                    isSuggested={i === 2}
-                  />
-                ))}
+                {playerBoard.map((count, i) => {
+                  const selectable = currentPlayer === 'player' && count > 0;
+                  return (
+                    <Pit
+                      key={`usr-${i}`}
+                      seeds={getSeedConfig(count)}
+                      activeOwner={selectable ? 'player' : undefined}
+                      isSuggested={currentPlayer === 'player' && i === suggestedPit}
+                      onPress={selectable ? () => handlePitPress(i) : undefined}
+                    />
+                  );
+                })}
               </View>
             </View>
           </View>
 
+          {gameOver && (
+            <Pressable style={styles.restartButton} onPress={resetGame}>
+              <Text style={styles.restartButtonText}>Recommencer</Text>
+            </Pressable>
+          )}
+
           <View style={styles.actionArea}>
             <View style={styles.lastMove}>
               <Text style={styles.lastMoveIcon}>⏱️</Text>
-              <Text style={styles.lastMoveText}>
-                Last move: Player 1 captured 2 seeds
-              </Text>
+              <Text style={styles.lastMoveText}>{lastMoveText}</Text>
               <Pressable>
                 <Text style={styles.viewHistory}>View History</Text>
               </Pressable>
@@ -309,6 +573,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: colors.primary,
     letterSpacing: -0.5,
+  },
+  headerRightButtons: {
+    flexDirection: 'row',
+    gap: 8,
   },
   scroll: {
     flex: 1,
@@ -430,6 +698,19 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(80, 68, 67, 0.3)',
     marginVertical: 4,
     marginHorizontal: spacing.unit,
+  },
+  restartButton: {
+    marginVertical: spacing.gutter,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: borderRadius.full,
+    backgroundColor: colors.tertiary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  restartButtonText: {
+    ...typography.titleMd,
+    color: colors.onTertiary,
   },
   actionArea: {
     width: '100%',
