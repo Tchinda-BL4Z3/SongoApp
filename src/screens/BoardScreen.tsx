@@ -15,6 +15,10 @@ import { colors, typography, spacing, borderRadius } from '../theme';
 import BottomNav from '../components/BottomNav';
 import { playTurn } from '../game/engine';
 import { saveGameRecord } from '../game/history';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { startBgm, stopBgm } from '../game/sound';
+
+const SOUND_KEY = 'songo_sound';
 
 const WOOD_TEXTURE =
   'https://lh3.googleusercontent.com/aida-public/AB6AXuCpFEfZBmR8yqY-_6gXTdO5L1TmhH4u7MM5Hi2I7EWCGgS7HA7Bdz9HWNDpJ8aP-HWbzXTzoCvHoDjwQ2-s_z90JeUVj7GYwxYF5_d6_EVnxblRFIrLJkTY8b7-ImKIFIK7t7pgMnpXuDJjK7rn9QmX-JT4SyeGRbSz-CbqYi_gMC4FRYGNJiQcbOqRq214E3Iuc9vWlquhfp3Ip62_LhwKsaxZGafecVMH7S0mkEDkAjgYwK0_1d8uyKF0MQF1N8EjWcgzN67OaLT2';
@@ -32,7 +36,7 @@ interface SeedConfig {
   dark: number;
 }
 
-const initialBoard = [4, 3, 4, 2, 3, 5, 3, 3, 4, 2, 5, 1, 4, 3];
+const initialBoard = [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5];
 
 const seedPatterns: Record<number, SeedConfig> = {
   0: { light: 0, dark: 0 },
@@ -283,6 +287,11 @@ export default function BoardScreen({
       winner,
     });
 
+    // Stop background music when the game ends
+    try {
+      stopBgm();
+    } catch {}
+
     return true;
   }, [player1Name, player2Name, mode, score]);
 
@@ -314,7 +323,7 @@ export default function BoardScreen({
       }
     }
 
-    const { board: nextBoard, captured } = playTurn(board, index);
+    const { board: nextBoard, captured } = playTurn(board, index, currentPlayer);
 
     setBoard(nextBoard);
     setScore(prev => ({
@@ -360,7 +369,7 @@ export default function BoardScreen({
       }
 
       const choice = playable[Math.floor(Math.random() * playable.length)];
-      const { board: nextBoard, captured } = playTurn(board, choice);
+      const { board: nextBoard, captured } = playTurn(board, choice, currentPlayer);
 
       setBoard(nextBoard);
       setScore(prev => ({
@@ -381,6 +390,24 @@ export default function BoardScreen({
 
     return () => clearTimeout(timeout);
   }, [currentPlayer, board, gameOver, mode, player1Name, player2Name, finishGame]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(SOUND_KEY)
+      .then(v => {
+        if (v === null || v === '1') {
+          startBgm();
+        } else {
+          stopBgm();
+        }
+      })
+      .catch(() => {
+        // ignore
+      });
+
+    return () => {
+      stopBgm();
+    };
+  }, []);
 
   const playerBoard = board.slice(0, 7);
   const opponentBoard = board.slice(7, 14);

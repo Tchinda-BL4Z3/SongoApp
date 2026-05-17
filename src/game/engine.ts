@@ -1,6 +1,6 @@
 import { captureChain } from './capture';
 
-export function playTurn(board: number[], index: number) {
+export function playTurn(board: number[], index: number, currentPlayer: 'player' | 'opponent') {
   const nextBoard = [...board];
   let seeds = nextBoard[index];
   if (seeds === 0) {
@@ -20,8 +20,8 @@ export function playTurn(board: number[], index: number) {
     seeds--;
   }
 
-  // 🔥 capture en chaîne
-  const captured = captureChain(nextBoard, i);
+  // 🔥 capture en chaîne seulement dans le camp adverse
+  const captured = captureChain(nextBoard, i, currentPlayer);
 
   return {
     board: nextBoard,

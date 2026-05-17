@@ -15,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors, typography, spacing, borderRadius } from '../theme';
 import BottomNav from '../components/BottomNav';
 import { loadGameHistory, GameRecord, formatDate, getWinnerText } from '../game/history';
+import { startBgm, stopBgm } from '../game/sound';
 
 const WOOD_TEXTURE =
   'https://lh3.googleusercontent.com/aida-public/AB6AXuCN_U-fyy7ZEVtNDFn03YqmEyQ74qlabAVi0taNJusuiTw5_GEzfTzLc8xLdT9X8728f5GvSXijFyAQOJnkSEqIkiuaq-X1MSA1_m_WOw3IUB-_joBLFx4I8aCwjGuK4SetYZto8nVjRjuYDJipXdWOqtaOmcpGjCYRoJ-zPpdvkxTjYmKQIMfmCa7dI_eXttNMjKWeoMcz-ejQC8Atr5BE5yB2RXtDJnS8_rBMZizbPER9Jo09iIbzILbV6DH78NC4T2xp8hPALxdy';
@@ -23,6 +24,7 @@ const HERO_IMAGE =
 
 const PLAYER_1_KEY = 'songo_player1';
 const PLAYER_2_KEY = 'songo_player2';
+const SOUND_KEY = 'songo_sound';
 
 interface HomeScreenProps {
   onNavigate: (mode: 'ai' | 'local', player1: string, player2: string) => void;
@@ -37,6 +39,9 @@ export default function HomeScreen({ onNavigate }: HomeScreenProps) {
   } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [history, setHistory] = useState<GameRecord[]>([]);
+  const [soundOn, setSoundOn] = useState(true);
+  const [showRules, setShowRules] = useState(false);
+  const [showStats, setShowStats] = useState(false);
 
   useEffect(() => {
     AsyncStorage.multiGet([PLAYER_1_KEY, PLAYER_2_KEY])
@@ -60,6 +65,19 @@ export default function HomeScreen({ onNavigate }: HomeScreenProps) {
     loadGameHistory().then(records => {
       setHistory(records.slice(-3).reverse()); // Last 3 games, newest first
     });
+
+    // Load sound preference
+    AsyncStorage.getItem(SOUND_KEY)
+      .then(v => {
+        const on = v === null ? true : v === '1';
+        setSoundOn(on);
+        if (on) {
+          startBgm();
+        } else {
+          stopBgm();
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const saveNames = async (first: string, second: string) => {
@@ -83,6 +101,15 @@ export default function HomeScreen({ onNavigate }: HomeScreenProps) {
   const handleStart = async (mode: 'ai' | 'local') => {
     const names = await saveNames(player1Name, player2Name);
     onNavigate(mode, names.player1, names.player2);
+  };
+
+  const toggleSound = async () => {
+    const next = !soundOn;
+    setSoundOn(next);
+    try {
+      await AsyncStorage.setItem(SOUND_KEY, next ? '1' : '0');
+    } catch {}
+    if (next) startBgm(); else stopBgm();
   };
 
   return (
@@ -184,35 +211,94 @@ export default function HomeScreen({ onNavigate }: HomeScreenProps) {
               </>
             )}
 
-            <Pressable style={styles.secondaryBtn}>
+            <Pressable style={styles.secondaryBtn} onPress={() => setShowRules(true)}>
               <Text style={styles.secondaryBtnIcon}>📖</Text>
               <Text style={styles.secondaryBtnLabel}>Rules</Text>
               <Text style={styles.secondaryBtnSub}>HOW TO HARVEST</Text>
             </Pressable>
-            <Pressable style={styles.secondaryBtn}>
+            <Pressable style={styles.secondaryBtn} onPress={() => setShowStats(true)}>
               <Text style={styles.secondaryBtnIcon}>🏆</Text>
               <Text style={styles.secondaryBtnLabel}>Scores</Text>
               <Text style={styles.secondaryBtnSub}>ELDER RECORDS</Text>
             </Pressable>
+            <Pressable style={styles.secondaryBtn} onPress={toggleSound}>
+              <Text style={styles.secondaryBtnIcon}>{soundOn ? '🔊' : '🔇'}</Text>
+              <Text style={styles.secondaryBtnLabel}>Son</Text>
+              <Text style={styles.secondaryBtnSub}>{soundOn ? 'ON' : 'OFF'}</Text>
+            </Pressable>
           </View>
 
-          {history.length > 0 && (
-            <View style={styles.historySection}>
-              <Text style={styles.historySectionTitle}>Historique récent</Text>
-              {history.map(record => (
-                <View key={record.id} style={styles.historyCard}>
-                  <View>
-                    <Text style={styles.historyGameMode}>
-                      {record.mode === 'ai' ? '🤖 vs IA' : '👥 2 joueurs'}
-                    </Text>
-                    <Text style={styles.historyScores}>
-                      {record.player1Name} {record.player1Score} - {record.player2Score} {record.player2Name}
-                    </Text>
-                    <Text style={styles.historyWinner}>{getWinnerText(record)}</Text>
-                  </View>
-                  <Text style={styles.historyDate}>{formatDate(record.timestamp)}</Text>
+          {showRules && (
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Règles du Songo</Text>
+                  <Pressable onPress={() => setShowRules(false)}>
+                    <Text style={styles.modalCloseBtn}>✕</Text>
+                  </Pressable>
                 </View>
-              ))}
+                <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+                  <Text style={styles.rulesText}>
+                    <Text style={styles.rulesBold}>Songo</Text> est un jeu de stratégie africain joué sur un plateau avec 14 puits (7 par joueur) et des graines.
+                  </Text>
+
+                  <Text style={styles.rulesSubtitle}>🎯 Objectif</Text>
+                  <Text style={styles.rulesText}>
+                    Capturer plus de graines que votre adversaire en fin de partie.
+                  </Text>
+
+                  <Text style={styles.rulesSubtitle}>📋 Règles Principales</Text>
+                  <Text style={styles.rulesText}>
+                    • Chaque joueur contrôle les 7 puits de son côté{'\n'}
+                    • Sélectionnez un puits avec des graines{'\n'}
+                    • Distribuez les graines une par une dans les puits suivants{'\n'}
+                    • Si vous terminez votre semis dans un puits adverse à 2 ou 3 graines, vous capturez ces graines{'\n'}
+                    • Les captures en chaîne sont automatiques tant que vous trouvez des cases adverses à 2 ou 3 graines{'\n'}
+                    • Le jeu se termine quand tous les puits d'un joueur sont vides
+                  </Text>
+
+                  <Text style={styles.rulesSubtitle}>🏆 Victoire</Text>
+                  <Text style={styles.rulesText}>
+                    Le joueur avec le plus de graines capturées gagne la partie.
+                  </Text>
+                </ScrollView>
+              </View>
+            </View>
+          )}
+
+          {showStats && (
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Text style={styles.modalTitle}>Statistiques & Historique</Text>
+                  <Pressable onPress={() => setShowStats(false)}>
+                    <Text style={styles.modalCloseBtn}>✕</Text>
+                  </Pressable>
+                </View>
+                <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
+                  {history.length > 0 ? (
+                    <>
+                      <Text style={styles.statsTitle}>Dernières Parties</Text>
+                      {history.map(record => (
+                        <View key={record.id} style={styles.historyCard}>
+                          <View>
+                            <Text style={styles.historyGameMode}>
+                              {record.mode === 'ai' ? '🤖 vs IA' : '👥 2 joueurs'}
+                            </Text>
+                            <Text style={styles.historyScores}>
+                              {record.player1Name} {record.player1Score} - {record.player2Score} {record.player2Name}
+                            </Text>
+                            <Text style={styles.historyWinner}>{getWinnerText(record)}</Text>
+                          </View>
+                          <Text style={styles.historyDate}>{formatDate(record.timestamp)}</Text>
+                        </View>
+                      ))}
+                    </>
+                  ) : (
+                    <Text style={styles.emptyText}>Aucune partie jouée pour le moment</Text>
+                  )}
+                </ScrollView>
+              </View>
             </View>
           )}
 
@@ -532,5 +618,69 @@ const styles = StyleSheet.create({
     ...typography.labelSm,
     color: colors.onSurfaceVariant,
     textAlign: 'right',
+  },
+  modalOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'flex-end',
+    zIndex: 1000,
+  },
+  modalContent: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: borderRadius.lg,
+    borderTopRightRadius: borderRadius.lg,
+    maxHeight: '90%',
+    paddingTop: spacing.gutter,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: spacing.gutter,
+    paddingBottom: spacing.gutter,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  modalTitle: {
+    ...typography.titleMd,
+    color: colors.onSurface,
+  },
+  modalCloseBtn: {
+    fontSize: 24,
+    color: colors.onSurfaceVariant,
+  },
+  modalScroll: {
+    paddingHorizontal: spacing.gutter,
+    paddingVertical: spacing.unit,
+  },
+  rulesText: {
+    ...typography.bodyMd,
+    color: colors.onSurface,
+    marginBottom: spacing.unit,
+    lineHeight: 22,
+  },
+  rulesBold: {
+    fontWeight: '700',
+  },
+  rulesSubtitle: {
+    ...typography.titleMd,
+    color: colors.secondary,
+    marginTop: spacing.unit,
+    marginBottom: spacing.unit * 0.5,
+  },
+  statsTitle: {
+    ...typography.titleMd,
+    color: colors.onSurface,
+    marginBottom: spacing.gutter,
+  },
+  emptyText: {
+    ...typography.bodyMd,
+    color: colors.onSurfaceVariant,
+    textAlign: 'center',
+    marginVertical: spacing.unit * 2,
   },
 });
